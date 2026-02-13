@@ -285,18 +285,13 @@ def train():
 
     plt.figure()
     for index in range(3):
-        img = xb[index]
-        print(img.shape)
-        img = img[:3]
-        print(img.shape)
-        img = img[[2, 1, 0]]
-        print(img.shape)
-        img = img.permute(1,2,0)
+        img = xb[index][:3][[2, 1, 0]].permute(1,2,0)
         print(img.shape)
         true_mask = yb[index]
         print(true_mask.shape)
-        preds = preds.to(torch.float32).cpu().numpy()
-        pred_mask = preds[index]
+        print(preds.shape)
+        preds = preds.to(torch.float32)
+        pred_mask = preds[index].permute(1, 2, 0).numpy()
         print(pred_mask.shape)
 
         plt.subplot(3, 3, index * 3 + 1)
@@ -311,7 +306,7 @@ def train():
 
         plt.subplot(3, 3, index * 3 + 3)
         plt.title("Predicted Mask")
-        plt.imshow(pred_mask, cmap="gray")
+        plt.imshow(pred_mask.cpu(), cmap="gray")
         plt.axis("off")
 
     plt.savefig(f"/outputs/{folder_path}/sample_val_preds.png", dpi=300, bbox_inches="tight")
