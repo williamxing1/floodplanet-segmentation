@@ -1,6 +1,6 @@
 import modal
 
-app = modal.App("dset-s2-unet")
+app = modal.App("floodplanet-model")
 
 image = (
     modal.Image.debian_slim()
@@ -27,6 +27,7 @@ output_volume = modal.Volume.from_name("floodplanet-outputs")
 
 def train():
     from torch.utils.data import Dataset, random_split, DataLoader
+    import torchvision.models.segmentation as segmentation
     from pathlib import Path
     import rasterio
     import numpy as np
@@ -36,14 +37,18 @@ def train():
     import matplotlib.pyplot as plt
     import torch.optim as optim
     import json, os
+    import time
+
     run = "S2" # PS or S2
     in_ch = 4 if run == "PS" else 10
+    load_weights = False
+    load_folder = "model44-S2"
 
     json_path = "/outputs/index.json"
     with open(json_path, "r") as f:
         data = json.load(f)
-    folder_path = "model_deeplab" + str(data["index"]) + "-" + run
-    print(str(data["index"]))
+    folder_path = "model" + str(data["index"]) + "-" + run
+    print(f"Folder name: {folder_path}")
     data["index"] += 1
     with open(json_path, "w") as f:
         json.dump(data, f)
@@ -99,143 +104,46 @@ def train():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(device)
 
-    class DiceLoss(nn.Module):
-        def __init__(self, eps=1e-6):
-            super().__init__()
-        def forward(self, logits, targets):
-            print(logits.shape)
-            print(targets.shape)
-            probs = torch.sigmoid(logits)
-            if targets.dim() == 3:
-                targets = targets.unsqueeze(0)
-            intersection = (probs * targets).sum(dim=(2,3))
-            union = probs.sum(dim=(2,3)) + targets.sum(dim=(2,3))
-            dice = (2 * intersection + self.eps) / (union + self.eps)
+    model = segmentation.deeplabv3_resnet101(weights="DEFAULT")
+    old = model.backbone.conv1
+    model.backbone.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    with torch.no_grad():
+        model.backbone.conv1.weight[:, :3] = old.weight
+        model.backbone.conv1.weight[:, 3:] = old.weight.mean(dim=1, keepdim=True)
+    model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
+    model = model.to(device).to(memory_format=torch.channels_last)
 
-    class DoubleConv(nn.Module):
-        def __init__(self, in_ch, out_ch):
-            super().__init__()
-
-            self.net = nn.Sequential(
-                nn.Conv2d(in_ch, out_ch, 3, padding=1),
-                nn.BatchNorm2d(out_ch),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(out_ch, out_ch, 3, padding=1),
-                nn.BatchNorm2d(out_ch),
-                nn.ReLU(inplace=True)
-            )
-        def forward(self, x):
-            return self.net(x)
-
-    # ResNet Encoder
-    class ResNetEncoder(nn.Module):
-        def __init__(self, in_ch):
-            super().__init__()
-
-            self.conv1 = nn.Conv2d(in_ch, 64, 7, 2, 3)
-            self.bn1 = nn.BatchNorm2d(64)
-            self.relu = nn.ReLU(inplace=True)
-            self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-
-            self.s1_conv1 = nn.Conv2d(64, 64, 3, 1, 1, bias=False)
-            self.s1_bn1 = nn.BatchNorm2d(64)
-            self.s1_conv2 = nn.Conv2d(64, 64, 3, 1, 1, bias=False)
-            self.s1_bn2 = nn.BatchNorm2d(64)
-
-            self.s2_conv1 = nn.Conv2d(64, 128, 3, 2, 1, bias=False)
-            self.s2_bn1 = nn.BatchNorm2d(128)
-            self.s2_conv2 = nn.Conv2d(128, 128, 3, 1, 1, bias=False)
-            self.s2_bn2 = nn.BatchNorm2d(128)
-            self.s2_skip = nn.Conv2d(64, 128, 1, 2, bias=False)
-
-            self.s3_conv1 = nn.Conv2d(128, 256, 3, 2, 1, bias=False)
-            self.s3_bn1 = nn.BatchNorm2d(256)
-            self.s3_conv2 = nn.Conv2d(256, 256, 3, 1, 1, bias=False)
-            self.s3_bn2 = nn.BatchNorm2d(256)
-            self.s3_skip = nn.Conv2d(128, 256, 1, 2, bias=False)
-
-        def forward(self, x):
-            x = self.relu(self.bn1(self.conv1(x)))
-            x0 = x
-
-            x = self.maxpool(x)
-            y = self.relu(self.s1_bn1(self.s1_conv1(x)))
-            y = self.s1_bn2(self.s1_conv2(y))
-            x = self.relu(y + x)
-            x1 = x
-
-            y = self.relu(self.s2_bn1(self.s2_conv1(x)))
-            y = self.s2_bn2(self.s2_conv2(y))
-            x = self.relu(y + self.s2_skip(x))
-            x2 = x
-
-            y = self.relu(self.s3_bn1(self.s3_conv1(x)))
-            y = self.s3_bn2(self.s3_conv2(y))
-            x = self.relu(y + self.s3_skip(x))
-            x3 = x
-
-            return x0, x1, x2, x3
-
-    class UNet(nn.Module):
-        def __init__(self, in_channels=3, num_classes=2):
-            super().__init__()
-
-            self.encoder = ResNetEncoder(in_channels)
-
-            self.up3 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-            self.dec3 = DoubleConv(384, 128)
-            self.up2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-            self.dec2 = DoubleConv(192, 64)
-            self.up1 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-            self.dec1 = DoubleConv(128, 64)
-            self.up0 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-            self.dec0 = DoubleConv(64, 64)
-
-            self.out = nn.Conv2d(64, num_classes, 1)
-
-        def forward(self, x):
-            ec0, ec1, ec2, ec3 = self.encoder(x)
-
-            up3 = self.up3(ec3)
-            dec3 = self.dec3(torch.cat([up3, ec2], dim=1))
-            up2 = self.up2(dec3)
-            dec2 = self.dec2(torch.cat([up2, ec1], dim=1))
-            up1 = self.up1(dec2)
-            dec1 = self.dec1(torch.cat([up1, ec0], dim=1))
-            up0 = self.up0(dec1)
-            dec0 = self.dec0(up0)
-
-            out = self.out(dec0)
-
-            return out
-
-    model = UNet(in_channels=in_ch).to(device).to(memory_format=torch.channels_last)
-    entropyLoss = nn.CrossEntropyLoss()
-    dice = DiceLoss()
-    def loss_fn(preds, yb):
-        return entropyLoss(preds, yb) + dice(preds, yb)
-    
+    if load_weights:
+        state_dict = torch.load(f"/outputs/{load_folder}/best_deeplab_floodplanet.pth")
+        model.load_state_dict(state_dict)
+    criterion = nn.BCEWithLogitsLoss()
 
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    epochs = 100
+    if load_weights:
+        state_dict = torch.load(f"/outputs/{load_folder}/best_optimizer.pth")
+        optimizer.load_state_dict(state_dict)
+    epochs = 50
     train_losses = []
     test_losses = []
     best_test = float("inf")
-
+    scaler = torch.amp.GradScaler("cuda")
     for epoch in range(epochs):
         model.train()
+        t0 = time.time()
         train_loss = 0.0
 
         for xb, yb in train_loader:
             xb = xb.to(device, memory_format=torch.channels_last, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                preds = model(xb)
-                loss = loss_fn(preds, yb)
+            with torch.autocast(device_type=device, dtype=torch.float16):
+                preds = model(xb)["out"]
+                yb = yb.unsqueeze(1).float()
+                loss = criterion(preds, yb)
 
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             train_loss += loss.item() * xb.size(0)
         train_loss /= len(train_loader.dataset)
@@ -247,17 +155,20 @@ def train():
             for xb, yb in val_loader:
                 xb = xb.to(device, memory_format=torch.channels_last, non_blocking=True)
                 yb = yb.to(device, non_blocking=True)
-                with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                    preds = model(xb)
-                    loss = loss_fn(preds, yb)
+                with torch.autocast(device_type=device, dtype=torch.float16):
+                    preds = model(xb)["out"]
+                    yb = yb.unsqueeze(1).float()
+                    loss = criterion(preds, yb)
                 test_loss += loss.item() * xb.size(0)
         test_loss /= len(val_loader.dataset)
         test_losses.append(test_loss)
         if test_loss < best_test:
             best_test = test_loss
-            torch.save(model.state_dict(), f"/outputs/{folder_path}/best_unet_dset_s2.pth")
-
-        print(f"Epoch {epoch+1}: Train Loss: {train_loss}, Test Loss: {test_loss}")
+            torch.save(model.state_dict(), f"/outputs/{folder_path}/best_deeplab_floodplanet.pth")
+            torch.save(optimizer.state_dict(), f"/outputs/{folder_path}/best_optimizer.pth")
+        t1 = time.time()
+        time_elapsed = t1 - t0
+        print(f"Epoch {epoch+1}: Train Loss: {train_loss}, Test Loss: {test_loss}, Time Elapsed: {time_elapsed:.2f} seconds")
 
     plt.figure()
     plt.plot(train_losses, label="Train Loss")
@@ -268,9 +179,16 @@ def train():
     plt.savefig(f"/outputs/{folder_path}/train_test_curve.png", dpi=300, bbox_inches="tight")
     plt.show()
 
-    model = UNet(in_channels=in_ch).to(device).to(memory_format=torch.channels_last)
-    state_dict = torch.load(f"/outputs/{folder_path}/best_unet_dset_s2.pth", map_location=device)
+    model = segmentation.deeplabv3_resnet101(weights="DEFAULT")
+    old = model.backbone.conv1
+    model.backbone.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    with torch.no_grad():
+        model.backbone.conv1.weight[:, :3] = old.weight
+        model.backbone.conv1.weight[:, 3:] = old.weight.mean(dim=1, keepdim=True)
+    model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
+    state_dict = torch.load(f"/outputs/{folder_path}/best_deeplab_floodplanet.pth", map_location=device)
     model.load_state_dict(state_dict)
+    model = model.to(device).to(memory_format=torch.channels_last)
 
     model.eval()
     xb, yb = next(iter(val_loader))
@@ -278,29 +196,31 @@ def train():
     yb = yb.to(device)
 
     with torch.no_grad():
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
-            preds = model(xb)
-            loss = loss_fn(preds, yb)
+        with torch.autocast(device_type=device, dtype=torch.float16):
+            preds = model(xb)["out"]
 
     plt.figure()
     for index in range(3):
-        img = xb[index][[2, 1, 0]].permute(1,2,0)
-        true_mask = yb[index]
-        pred_mask = preds[index]
+        img = xb[index][:3][[2, 1, 0]].permute(1,2,0).cpu().numpy()
+        true_mask = yb[index].cpu().numpy()
+        preds = preds.to(torch.float32)
+        preds_probs = torch.sigmoid(preds)
+        pred_mask = (preds_probs > 0.5).float()
+        pred_mask = pred_mask[index].permute(1, 2, 0).cpu().numpy()
 
         plt.subplot(3, 3, index * 3 + 1)
         plt.title("Input Image")
-        plt.imshow(img.cpu())
+        plt.imshow(img)
         plt.axis("off")
 
         plt.subplot(3, 3, index * 3 + 2)
         plt.title("Ground Truth Mask")
-        plt.imshow(true_mask.cpu(), cmap="gray")
+        plt.imshow(true_mask, cmap="gray")
         plt.axis("off")
 
         plt.subplot(3, 3, index * 3 + 3)
         plt.title("Predicted Mask")
-        plt.imshow(pred_mask.cpu(), cmap="gray")
+        plt.imshow(pred_mask, cmap="gray")
         plt.axis("off")
 
     plt.savefig(f"/outputs/{folder_path}/sample_val_preds.png", dpi=300, bbox_inches="tight")
