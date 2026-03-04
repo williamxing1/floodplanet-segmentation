@@ -2,3 +2,4 @@ FloodPlanet/
 __pycache__
 test.py
 index.json
+.DS_Store
