@@ -1,4 +1,5 @@
 FloodPlanet/
+data/
 __pycache__
 test.py
 index.json
