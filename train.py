@@ -7,7 +7,7 @@ import torch.optim as optim
 import json, os
 import time
 from unet_model import UNet
-from dataloader import Sentinel2Dataset, FloodPlanetDataset
+from data_code.dataloader import Sentinel2Dataset, FloodPlanetDataset
 import torchvision.models.segmentation as segmentation
 
 class Config:
