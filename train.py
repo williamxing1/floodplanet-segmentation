@@ -7,26 +7,35 @@ import torch.optim as optim
 import json, os
 import time
 from unet_model import UNet
-from dataloader import FloodPlanetDataset
+from dataloader import Sentinel2Dataset, FloodPlanetDataset
+import torchvision.models.segmentation as segmentation
 
-run = "S2" # PS or S2
-in_ch = 4 if run == "PS" else 10
-load_weights = True
-load_folder = "model46-S2"
+class Config:
+    run: str = "S2" # PS or S2
+    in_ch: int = 4 if run == "PS" else 7
+    load_weights: bool = False
+    load_folder: str = "model46-S2"
+    epochs: int = 50
+    model: str = "deeplabv3" # "deeplabv3" or "unet"
+    learning_rate: float = 1e-3
 
+config = Config()
 json_path = "/outputs/index.json"
 with open(json_path, "r") as f:
     data = json.load(f)
-folder_path = "model" + str(data["index"]) + "-" + run
+folder_path = "model" + str(data["index"]) + "-" + config.run
 print(f"Folder name: {folder_path}")
 data["index"] += 1
 with open(json_path, "w") as f:
     json.dump(data, f)
 os.makedirs(f"/outputs/{folder_path}", exist_ok=True)
 
-dataset = FloodPlanetDataset("/data/FloodPlanet")
-train_size = int(0.8 * len(dataset)) + 1
-val_size = int(0.2 * len(dataset))
+if config.run == "S2":
+    dataset = Sentinel2Dataset("/data/tif_model_training")
+else:
+    dataset = FloodPlanetDataset("/data/FloodPlanet", config.run)
+train_size = int(0.8 * len(dataset))
+val_size = len(dataset) - train_size
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
 
 train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True, prefetch_factor=4)
@@ -37,31 +46,33 @@ torch.backends.cudnn.benchmark = True
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Device: {device}")
 
-model = UNet(in_channels=in_ch, num_classes=1).to(device).to(memory_format=torch.channels_last)
-"""
-model = segmentation.deeplabv3_resnet101(weights="DEFAULT")
+if config.model == "unet":
+    model = UNet(in_channels=config.in_ch, num_classes=1).to(device).to(memory_format=torch.channels_last)
+elif config.model == "deeplabv3":
+    model = segmentation.deeplabv3_resnet101(weights="DEFAULT")
     old = model.backbone.conv1
-    model.backbone.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    model.backbone.conv1 = nn.Conv2d(config.in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
     with torch.no_grad():
         model.backbone.conv1.weight[:, :3] = old.weight
         model.backbone.conv1.weight[:, 3:] = old.weight.mean(dim=1, keepdim=True)
     model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
-"""
-if load_weights:
-    state_dict = torch.load(f"/outputs/{load_folder}/best_unet_floodplanet.pth")
-    model.load_state_dict(state_dict)
-criterion = nn.BCEWithLogitsLoss()
+    model = model.to(device).to(memory_format=torch.channels_last)
 
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
-if load_weights:
-    state_dict = torch.load(f"/outputs/{load_folder}/best_optimizer.pth")
+if config.load_weights:
+    state_dict = torch.load(f"/outputs/{config.load_folder}/best_unet_floodplanet.pth")
+    model.load_state_dict(state_dict)
+criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0], device=device))
+
+optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
+if config.load_weights:
+    state_dict = torch.load(f"/outputs/{config.load_folder}/best_optimizer.pth")
     optimizer.load_state_dict(state_dict)
-epochs = 100
 train_losses = []
 test_losses = []
 best_test = float("inf")
+scaler = torch.amp.GradScaler("cuda")
 
-for epoch in range(epochs):
+for epoch in range(config.epochs):
     model.train()
     t0 = time.time()
     train_loss = 0.0
@@ -70,13 +81,16 @@ for epoch in range(epochs):
         xb = xb.to(device, memory_format=torch.channels_last, non_blocking=True)
         yb = yb.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        with torch.autocast(device_type=device, dtype=torch.float16):
             preds = model(xb)
+            if config.model == "deeplabv3":
+                preds = preds["out"]
             yb = yb.unsqueeze(1).float()
             loss = criterion(preds, yb)
-
-        loss.backward()
-        optimizer.step()
+        
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         train_loss += loss.item() * xb.size(0)
     train_loss /= len(train_loader.dataset)
@@ -88,8 +102,10 @@ for epoch in range(epochs):
         for xb, yb in test_loader:
             xb = xb.to(device, memory_format=torch.channels_last, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
-            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            with torch.autocast(device_type=device, dtype=torch.float16):
                 preds = model(xb)
+                if config.model == "deeplabv3":
+                    preds = preds["out"]
                 yb = yb.unsqueeze(1).float()
                 loss = criterion(preds, yb)
             test_loss += loss.item() * xb.size(0)
@@ -112,16 +128,18 @@ plt.legend()
 plt.savefig(f"/outputs/{folder_path}/train_test_curve.png", dpi=300, bbox_inches="tight")
 plt.show()
 
-model = UNet(in_channels=in_ch, num_classes=1).to(device).to(memory_format=torch.channels_last)
-"""
-model = segmentation.deeplabv3_resnet101(weights="DEFAULT")
+if config.model == "unet":
+    model = UNet(in_channels=config.in_ch, num_classes=1).to(device).to(memory_format=torch.channels_last)
+elif config.model == "deeplabv3":
+    model = segmentation.deeplabv3_resnet101(weights="DEFAULT")
     old = model.backbone.conv1
-    model.backbone.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    model.backbone.conv1 = nn.Conv2d(config.in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
     with torch.no_grad():
         model.backbone.conv1.weight[:, :3] = old.weight
         model.backbone.conv1.weight[:, 3:] = old.weight.mean(dim=1, keepdim=True)
     model.classifier[4] = nn.Conv2d(256, 1, kernel_size=1)
-"""
+    model = model.to(device).to(memory_format=torch.channels_last)
+
 state_dict = torch.load(f"/outputs/{folder_path}/best_unet_floodplanet.pth", map_location=device)
 model.load_state_dict(state_dict)
 
@@ -131,8 +149,10 @@ xb = xb.to(device, memory_format=torch.channels_last)
 yb = yb.to(device)
 
 with torch.no_grad():
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+    with torch.autocast(device_type=device, dtype=torch.float16):
         preds = model(xb)
+        if config.model == "deeplabv3":
+            preds = preds["out"]
 
 plt.figure()
 for index in range(3):

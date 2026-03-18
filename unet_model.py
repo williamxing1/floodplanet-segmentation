@@ -23,7 +23,7 @@ class Resnet34(nn.Module):
 
         self.resnet = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1)
         old = self.resnet.conv1
-        self.resnet.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3)
+        self.resnet.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
         with torch.no_grad():
             self.resnet.conv1.weight[:, :3] = old.weight
             self.resnet.conv1.weight[:, 3:] = old.weight.mean(dim=1, keepdim=True)

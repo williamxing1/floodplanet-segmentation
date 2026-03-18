@@ -11,13 +11,13 @@ image = (
     .add_local_file("data_loading_utils.py", "/data_loading_utils.py")
 )
 
-data_volume = modal.Volume.from_name("lstm-runoff-modeling-data")
-output_volume = modal.Volume.from_name("lstm-runoff-modeling-outputs")
+data_volume = modal.Volume.from_name("floodplanet-data")
+output_volume = modal.Volume.from_name("floodplanet-outputs")
 
 @app.function(
     image=image,
     gpu="A100",
-    timeout=60*60,
+    timeout=60*5,
     volumes={
         "/data": data_volume,
         "/outputs": output_volume

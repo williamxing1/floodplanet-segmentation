@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 ogr.UseExceptions()
 
 # ---------- Ancillary functions; Used for loading LCC / DEM ----------
-tif_path = Path("data/test.tif")
 lcc_cache = Path("data/lcc_cache")
 dem_cache = Path("data/dem_cache")
 
@@ -134,7 +133,7 @@ def reproject_and_merge_mean(file_list, meta):
                     src_nodata=getattr(src, "nodata", None),
                     dst_nodata=0,
                 )
-                valid = np.isfinite(out)
+                valid = np.isfinite(temp)
                 out[valid] += temp[valid]
                 count[valid] += 1
         except:
@@ -230,7 +229,7 @@ def get_indices(path):
             output["NIR"] = i
         elif "swir 1" in description or "swir1" in description:
             output["SWIR"] = i
-        elif ("swir 2" in description and "swir2" in description) and "SWIR" not in output:
+        elif ("swir 2" in description or "swir2" in description) and "SWIR" not in output:
             output["SWIR"] = i
     if len(output) == 5:
         return output
@@ -256,7 +255,7 @@ def stack_with_ancillary(ref_meta, R, G, B, NIR, SWIR, LCC, DEM, out_path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     meta = ref_meta.copy()
     meta.update(count=7, dtype=np.float32, compress="DEFLATE")
-    bands = [np.asarray(R, dtype=np.float32), np.asarray(B, dtype=np.float32), np.asarray(G, dtype=np.float32),
+    bands = [np.asarray(R, dtype=np.float32), np.asarray(G, dtype=np.float32), np.asarray(B, dtype=np.float32),
              np.asarray(NIR, dtype=np.float32), np.asarray(SWIR, dtype=np.float32), np.asarray(LCC, dtype=np.float32), np.asarray(DEM, dtype=np.float32)]
     with rasterio.open(out_path, "w", **meta) as dst:
         for i, arr in enumerate(bands, start=1):
