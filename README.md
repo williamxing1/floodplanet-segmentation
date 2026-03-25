@@ -18,3 +18,6 @@ T_max = 100. All of these hyperparameters can be changed in the config in `train
 The Sentinel-2 subset of the FloodPlanet dataset is decently difficult, making it very difficult for even SOTA pixel segmentation models to achieve great results. Sample predictions can be found in `results/sample_val_preds.png`, and the train test curve is in `results/train_test_curve.png`. However, the UNet significantly outperforms the results from the original [paper](https://spj.science.org/doi/10.34133/remotesensing.0575). ![Original Paper Results](results/original_paper_results.png)
 
 These are the original paper results, achieving an average IoU on the Sentinel-2 (S2) subset of 0.624 and an average F1 score of 0.736. On the other hand, the UNet model is able to achieve an IoU of 0.71 and a F1 score of 0.82, clearly outperforming the original paper.
+
+## Acknowledgements
+Huge thanks to Qing "Henry" Yang at Stanford for mentoring me.
