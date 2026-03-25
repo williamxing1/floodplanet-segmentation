@@ -2,7 +2,7 @@ from pathlib import Path
 import rasterio
 import numpy as np
 
-tifs_path = Path("data/tif_model_training")
+tifs_path = Path("../data/tif_model_training")
 all_values = []
 
 for tif in tifs_path.iterdir():

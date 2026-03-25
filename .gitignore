@@ -1,6 +1,10 @@
-FloodPlanet/
-data/
 __pycache__
 test.py
-index.json
 .DS_Store
+
+data/*
+!data/test.json
+!data/test.tif
+
+results/best_optimizer.pth
+results/best_unet_floodplanet.pth

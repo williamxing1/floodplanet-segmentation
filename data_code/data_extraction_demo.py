@@ -5,8 +5,8 @@ import numpy as np
 import rasterio
 
 # ---------- Sentinel 2 Channel Demo ----------
-tif_path = Path("data/test.tif")
-json_path = Path("data/test.json")
+tif_path = Path("../data/test.tif")
+json_path = Path("../data/test.json")
 
 data = extract_rgb_nir_swir(tif_path, json_path)
 R, G, B, NIR, SWIR = data["R"], data["G"], data["B"], data["NIR"], data["SWIR"]

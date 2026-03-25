@@ -7,7 +7,7 @@ import torch.optim as optim
 import json, os
 import time
 from unet_model import UNet
-from data_code.dataloader import Sentinel2Dataset, FloodPlanetDataset
+from dataloader import Sentinel2Dataset, FloodPlanetDataset
 import torchvision.models.segmentation as segmentation
 
 class Config:
@@ -15,8 +15,8 @@ class Config:
     in_ch: int = 4 if run == "PS" else 7
     load_weights: bool = False
     load_folder: str = "model46-S2"
-    epochs: int = 50
-    model: str = "deeplabv3" # "deeplabv3" or "unet"
+    epochs: int = 100
+    model: str = "unet" # "deeplabv3" or "unet"
     learning_rate: float = 1e-3
 
 config = Config()
@@ -61,7 +61,7 @@ elif config.model == "deeplabv3":
 if config.load_weights:
     state_dict = torch.load(f"/outputs/{config.load_folder}/best_unet_floodplanet.pth")
     model.load_state_dict(state_dict)
-criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0], device=device))
+criterion = nn.BCEWithLogitsLoss()
 
 optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
 if config.load_weights:
@@ -71,6 +71,7 @@ train_losses = []
 test_losses = []
 best_test = float("inf")
 scaler = torch.amp.GradScaler("cuda")
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
 
 for epoch in range(config.epochs):
     model.train()
@@ -93,11 +94,13 @@ for epoch in range(config.epochs):
         scaler.update()
 
         train_loss += loss.item() * xb.size(0)
+    scheduler.step()
     train_loss /= len(train_loader.dataset)
     train_losses.append(train_loss)
 
     model.eval()
     test_loss = 0.0
+    tp, fp, fn = 0, 0, 0
     with torch.no_grad():
         for xb, yb in test_loader:
             xb = xb.to(device, memory_format=torch.channels_last, non_blocking=True)
@@ -108,6 +111,11 @@ for epoch in range(config.epochs):
                     preds = preds["out"]
                 yb = yb.unsqueeze(1).float()
                 loss = criterion(preds, yb)
+            probs = torch.sigmoid(preds)
+            pred_mask = (probs > 0.5).float()
+            tp += (pred_mask * yb).sum().item()
+            fp += (pred_mask * (1 - yb)).sum().item()
+            fn += ((1 - pred_mask) * yb).sum().item()
             test_loss += loss.item() * xb.size(0)
     test_loss /= len(test_loader.dataset)
     test_losses.append(test_loss)
@@ -115,9 +123,16 @@ for epoch in range(config.epochs):
         best_test = test_loss
         torch.save(model.state_dict(), f"/outputs/{folder_path}/best_unet_floodplanet.pth")
         torch.save(optimizer.state_dict(), f"/outputs/{folder_path}/best_optimizer.pth")
+    # F1, IoU calculations
+    eps = 1e-7
+    precision = tp / (tp + fp + eps)
+    recall = tp / (tp + fn + eps)
+    f1 = 2 * precision * recall / (precision + recall + eps)
+    iou = tp / (tp + fp + fn + eps)
+
     t1 = time.time()
     time_elapsed = t1 - t0
-    print(f"Epoch {epoch+1}: Train Loss: {train_loss}, Test Loss: {test_loss}, Time Elapsed: {time_elapsed:.2f} seconds")
+    print(f"Epoch {epoch+1}: Train Loss: {train_loss}, Test Loss: {test_loss}, Learning Rate: {optimizer.param_groups[0]['lr']}, F1: {f1:.4f}, IoU: {iou:.4f} Time Elapsed: {time_elapsed:.2f} seconds")
 
 plt.figure()
 plt.plot(train_losses, label="Train Loss")

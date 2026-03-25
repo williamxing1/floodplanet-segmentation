@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 ogr.UseExceptions()
 
 # ---------- Ancillary functions; Used for loading LCC / DEM ----------
-lcc_cache = Path("data/lcc_cache")
-dem_cache = Path("data/dem_cache")
+lcc_cache = Path("../data/lcc_cache")
+dem_cache = Path("../data/dem_cache")
 
 def get_tile_meta(path):
     """Returns meta, bounds, wgs84 bounds, crs from a TIF file"""
@@ -145,7 +145,7 @@ def reproject_and_merge_mean(file_list, meta):
 def get_lcc_list(bounds):
     """Extracts a bunch of LCC files based on some boundaries."""
     s3_url = "https://esa-worldcover.s3.eu-central-1.amazonaws.com"
-    source = ogr.Open("data/worldcover.geojson")
+    source = ogr.Open("../data/worldcover.geojson")
     layer = source.GetLayer()
     extent_geom = ogr.Geometry(ogr.wkbPolygon)
     ring = ogr.Geometry(ogr.wkbLinearRing)
@@ -167,7 +167,7 @@ def get_lcc_list(bounds):
     return elements
 
 def glo30list(bounds):
-    source = ogr.Open("data/cop30-2021.geojson")
+    source = ogr.Open("../data/cop30-2021.geojson")
     layer = source.GetLayer()
     extent_geom = ogr.Geometry(ogr.wkbPolygon)
     ring = ogr.Geometry(ogr.wkbLinearRing)

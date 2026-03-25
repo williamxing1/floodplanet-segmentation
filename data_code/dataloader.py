@@ -37,7 +37,7 @@ class Sentinel2DatasetDownload(Dataset):
                     # DEM Extraction
                     dem_d = get_dem_for_tile(ref_meta, wgs84_bounds)
                     dem = dem_d["arr"]
-                    input_out_path = Path("data/tif_model_training") / f"{tif.stem}_7bands.tif"
+                    input_out_path = Path("../data/tif_model_training") / f"{tif.stem}_7bands.tif"
                     out_path = stack_with_ancillary(ref_meta, channels["R"], channels["G"], channels["B"], channels["NIR"], channels["SWIR"], lcc, dem, input_out_path)
                     self.samples.append((out_path, dataset_type.parent / "labels" / tif.name))
                     if index % 10 == 0:
@@ -121,7 +121,6 @@ class Sentinel2Dataset(Dataset):
         mask = F.interpolate(mask, size=(256, 256), mode="nearest")
         mask = mask.squeeze(0).squeeze(0).long()
         mask = (mask == 1).long()
-        print(f"Mask: {mask.unique()}")
         return image, mask
 
 # Used for non-Sentinel 2 data
@@ -164,7 +163,7 @@ class FloodPlanetDataset(Dataset):
         return image, mask
 
 t0 = time.time()
-# dataset = Sentinel2DatasetDownload("/Volumes/ml_ssd/FloodPlanet/FloodPlanet")
+# dataset = Sentinel2DatasetDownload("FloodPlanet/FloodPlanet")
 t1 = time.time()
 time_passed = t1-t0
 print(f"Time elapsed: {(t1-t0):.2f}")

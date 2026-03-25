@@ -1,0 +1,16 @@
+{
+  "properties": {
+    "eo:bands": [
+      {"name": "Band 1", "description": "blue"},
+      {"name": "Band 2", "description": "green"},
+      {"name": "Band 3", "description": "red"},
+      {"name": "Band 4", "description": "Red Edge 1"},
+      {"name": "Band 5", "description": "Red Edge 2"},
+      {"name": "Band 6", "description": "Red Edge 3"},
+      {"name": "Band 7", "description": "NIR"},
+      {"name": "Band 8", "description": "Red Edge 4"},
+      {"name": "Band 9", "description": "SWIR 1"},
+      {"name": "Band 10", "description": "SWIR 2"}
+    ]
+  }
+}
